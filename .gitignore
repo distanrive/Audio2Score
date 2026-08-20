@@ -1,0 +1,8 @@
+__pycache__/
+.idea/
+testcases/
+.mscbackup/
+run_gui.bat
+*.mid
+*.musicxml
+*.mscz
