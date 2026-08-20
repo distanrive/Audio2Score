@@ -305,9 +305,14 @@ def _detect_subdiv(raw_events, bpm):
     # a sixteenth-note gap is ~beat/4; an eighth is ~beat/2. Anything under
     # 0.375 beat (1.5 sixteenths) is unrepresentable on an eighth grid.
     n_16 = int(np.sum(gaps < beat * 0.375))
-    # require a handful of sixteenths, not a single isolated ornament, before
-    # switching the whole piece to a finer grid
-    return 4 if n_16 >= 3 and n_16 / gaps.size >= 0.08 else 2
+    # A real sixteenth figure (>=2 sixteenth gaps, i.e. a 3-note run) is enough
+    # to warrant the finer grid. The old ratio floor (>=8%) missed *sparse*
+    # sixteenths: a single fast arpeggio/ornament in an otherwise eighth/quarter
+    # piece (ratio ~0.4%) was snapped to the eighth grid and merged. Since the
+    # sixteenth grid is a strict superset of the eighth grid, switching the whole
+    # piece to it loses nothing -- subdiv 2 vs 4 produce identical output on
+    # eighth-heavy pieces, and only the genuine sixteenths change.
+    return 4 if n_16 >= 2 else 2
 
 
 def _quantize(events, bpm, subdiv=2):

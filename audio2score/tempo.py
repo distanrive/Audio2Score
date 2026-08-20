@@ -88,9 +88,41 @@ def detect_downbeats(audio, sr, bpm):
         return np.empty(0), None, None
     if beats.size == 0:
         return np.empty(0), None, None
-    downbeats = beats[beats[:, 1] == 1, 0]
+
+    # 3/4 vs 6/4 disambiguation: a 6-beat bar is two 3-beat groups, so madmom's
+    # 6/4 is often a *doubled* 3/4 (its onset/HMM fit can't tell the two apart).
+    # When madmom reports 6 beats, re-decode as 3/4 and keep it if the downbeats
+    # land on clearly stronger beats -- the downbeat/non-downbeat activation
+    # separation is higher for the true meter (e.g. With All Your Heart: 1.82 for
+    # 3/4 vs 1.58 for 6/4). Manual ``--time-sig 6/4`` still overrides.
     beats_per_bar = int(beats[:, 1].max())
+    if beats_per_bar == 6:
+        beats3 = np.asarray(DBNDownBeatTrackingProcessor(
+            beats_per_bar=[3], fps=100)(act))
+        if _downbeat_separation(act, beats3) > _downbeat_separation(act, beats):
+            beats = beats3
+            beats_per_bar = 3
+
+    downbeats = beats[beats[:, 1] == 1, 0]
     ibi = np.diff(beats[:, 0])
     ibi = ibi[ibi > 0]
     tempo = 60.0 / float(np.median(ibi)) if len(ibi) else None
     return downbeats, beats_per_bar, tempo
+
+
+def _downbeat_separation(act, beats, fps=100):
+    """Mean downbeat-activation at downbeats / at non-downbeats.
+
+    Higher = the downbeats land on stronger beats, i.e. the meter interpretation
+    is a better fit to the RNN's downbeat curve. Used to disambiguate 3/4 vs 6/4.
+    """
+    if beats.size == 0:
+        return -1.0
+    idx = lambda ts: np.clip((np.asarray(ts) * fps).astype(int), 0, act.shape[0] - 1)
+    dbs = beats[beats[:, 1] == 1, 0]
+    non = beats[beats[:, 1] != 1, 0]
+    if len(dbs) == 0 or len(non) == 0:
+        return 0.0
+    a_db = float(act[idx(dbs), 1].mean())
+    a_non = float(act[idx(non), 1].mean())
+    return a_db / max(a_non, 1e-9)
