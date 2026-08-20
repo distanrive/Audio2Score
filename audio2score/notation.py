@@ -80,16 +80,28 @@ def midi_to_musicxml(midi_path, out_path, *, audio=None, sr=16000, hand_split=60
     # in the first measure (correct bars, no lost notes); a true pickup measure
     # via Measure.paddingLeft could replace this later.
     shift_sec = 0.0
+    beat_len = 60.0 / bpm
+    measure_sec = numerator * beat_len
     if downbeats is not None and len(downbeats):
         t0 = float(downbeats[0])
-        beat_len = 60.0 / bpm
-        measure_sec = numerator * beat_len
         n = int(t0 / measure_sec)          # floor for positive values
         offset = t0 - n * measure_sec
         if offset > 0.5 * beat_len:        # downbeat off the measure grid => pickup
             shift_sec = (n + 1) * measure_sec - t0
             raw_events = [(e[0] + shift_sec, e[1] + shift_sec, e[2], e[3])
                           for e in raw_events if e[1] + shift_sec > 0.0]
+
+    # Tempo drift / rubato: a single constant tempo can't align the *downbeats*
+    # to a fixed grid over a long piece (a ~1% tempo error accumulates into
+    # several beats of drift, pushing notes off measure boundaries). Re-anchor
+    # every measure onto the grid: warp each event through a piecewise-linear
+    # map keyed to the downbeats, so a note on a downbeat always lands on a
+    # measure boundary. The constant-tempo grid below then only subdivides
+    # *within* a measure.
+    if downbeats is not None and len(downbeats) >= 2:
+        raw_events = _warp_to_grid(raw_events,
+                                   np.asarray(downbeats, dtype=float) + shift_sec,
+                                   measure_sec)
 
     # adaptive quantization grid: sixteenths where the music actually has them,
     # else eighths (a fixed eighth grid merges sixteenths at slow tempi, e.g.
@@ -112,7 +124,8 @@ def midi_to_musicxml(midi_path, out_path, *, audio=None, sr=16000, hand_split=60
 
     def process(hand_events):
         clipped = _clip_offsets(hand_events, max_dur_sec, grid_sec, typical_sec, measure_grid)
-        return _chord_merge(_quantize(clipped, bpm, subdiv))
+        triplet_map = _detect_triplets(clipped, beat_len, subdiv)
+        return _chord_merge(_quantize(clipped, bpm, subdiv, triplet_map))
 
     rh_raw, lh_raw = _split_hands(raw_events, hand_split)
     rh = process(rh_raw)
@@ -245,6 +258,30 @@ def _resplit(pitches, lo_c, hi_c):
     return assign
 
 
+def _warp_to_grid(events, db, measure_sec):
+    """Re-anchor ``events`` onto a uniform grid keyed to the downbeats ``db``.
+
+    Maps downbeat ``db[k]`` to grid time ``db[0] + k*measure_sec``, piecewise
+    linear between consecutive downbeats, so tempo drift / rubato between
+    downbeats is cancelled -- a note on a downbeat always lands on a measure
+    boundary. Outside ``[db[0], db[-1]]`` (pickup / tail) it extrapolates by the
+    boundary measure's tempo.
+    """
+
+    def t_to_grid(t):
+        k = int(np.searchsorted(db, t, side="right")) - 1
+        if k < 0:  # pickup before the first downbeat
+            span = db[1] - db[0]
+            return db[0] + (t - db[0]) / span * measure_sec
+        if k >= len(db) - 1:  # tail after the last downbeat
+            span = db[-1] - db[-2]
+            return db[0] + (len(db) - 1 + (t - db[-1]) / span) * measure_sec
+        frac = (t - db[k]) / (db[k + 1] - db[k])
+        return db[0] + (k + frac) * measure_sec
+
+    return [(t_to_grid(s), t_to_grid(e), p, v) for s, e, p, v in events]
+
+
 def _clip_offsets(events, max_dur_sec, grid_sec, typical_sec=None, measure_grid=None):
     """Clip each note's offset to the next *quantized* onset and a max.
 
@@ -315,19 +352,61 @@ def _detect_subdiv(raw_events, bpm):
     return 4 if n_16 >= 2 else 2
 
 
-def _quantize(events, bpm, subdiv=2):
-    """Snap (start, end, pitch, vel) to the subdiv grid (anchored at t=0),
-    in quarter-length units."""
+def _detect_triplets(events, beat_len, subdiv):
+    """Find 3-note groups with ~1/3-beat onset gaps (eighth-note triplets).
+
+    Returns ``{rounded_onset_sec -> quantized_ql}`` for every triplet note. The
+    onset is the *warped* grid-time (in seconds); the value is the note's QL
+    position on a 1/3 grid anchored at the nearest subdiv position. A binary
+    grid (8th/16th) can't represent 1/3, so these are split out before the
+    regular quantization snaps them to 1/4 or 1/2.
+    """
+    distinct = sorted({round(e[0], 4) for e in events})
+    if len(distinct) < 3:
+        return {}
+    gaps = np.diff(distinct) / beat_len
+    result = {}
+    i = 0
+    while i < len(gaps) - 1:
+        if 0.28 <= gaps[i] <= 0.42 and 0.28 <= gaps[i + 1] <= 0.42:
+            anchor_ql = round(distinct[i] / beat_len * subdiv) / subdiv
+            for k in range(3):
+                # exact 1/3 fraction (not rounded) -- music21 needs the exact
+                # value to recognise it as a triplet ('inexpressible' otherwise)
+                result[round(distinct[i + k], 4)] = anchor_ql + k / 3.0
+            i += 3
+        else:
+            i += 1
+    return result
+
+
+def _quantize(events, bpm, subdiv=2, triplet_map=None):
+    """Snap (start, end, pitch, vel) to the subdiv grid, in quarter-length units.
+
+    Notes whose onset is in ``triplet_map`` (from :func:`_detect_triplets`) are
+    placed on a 1/3 grid instead, so an eighth-note triplet is written as three
+    equal 1/3-quarter notes (music21 then emits the tuplet).
+    """
     beat_len = 60.0 / bpm
     grid = beat_len / subdiv
+    triplet_map = triplet_map or {}
     out = []
     for start, end, pitch, _vel in events:
-        onset_ql = round(start / grid) * grid / beat_len
-        offset_ql = round(end / grid) * grid / beat_len
-        dur_ql = offset_ql - onset_ql
-        if dur_ql < 1.0 / subdiv:
-            dur_ql = 1.0 / subdiv
-        out.append((round(max(0.0, onset_ql), 4), round(dur_ql, 4), pitch))
+        key = round(start, 4)
+        if key in triplet_map:
+            # triplet note: exact 1/3 position and length (rounding 1/3 to
+            # 0.3333 makes music21 treat the duration as 'inexpressible')
+            onset_ql = triplet_map[key]
+            dur_ql = 1.0 / 3.0
+        else:
+            onset_ql = round(start / grid) * grid / beat_len
+            offset_ql = round(end / grid) * grid / beat_len
+            dur_ql = offset_ql - onset_ql
+            if dur_ql < 1.0 / subdiv:
+                dur_ql = 1.0 / subdiv
+            onset_ql = round(max(0.0, onset_ql), 4)
+            dur_ql = round(dur_ql, 4)
+        out.append((onset_ql, dur_ql, pitch))
     return out
 
 
