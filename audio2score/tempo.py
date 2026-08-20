@@ -104,9 +104,20 @@ def detect_downbeats(audio, sr, bpm):
             beats_per_bar = 3
 
     downbeats = beats[beats[:, 1] == 1, 0]
-    ibi = np.diff(beats[:, 0])
-    ibi = ibi[ibi > 0]
-    tempo = 60.0 / float(np.median(ibi)) if len(ibi) else None
+
+    # Tempo from the *downbeat* spacing, not the median inter-beat interval: the
+    # latter carries a small systematic bias (~1.3% on With All Your Heart, 157.9
+    # vs true ~160) that accumulates over a long piece into several beats of
+    # drift, pushing notes off measure boundaries and leaving spurious rests.
+    # A linear fit of the downbeat times recovers the steady tempo and cancels
+    # that drift (the fixed output grid has to be a single constant tempo).
+    if len(downbeats) >= 3:
+        measure_period = float(np.polyfit(np.arange(len(downbeats)), downbeats, 1)[0])
+        tempo = 60.0 * beats_per_bar / measure_period if measure_period > 0 else None
+    else:
+        ibi = np.diff(beats[:, 0])
+        ibi = ibi[ibi > 0]
+        tempo = 60.0 / float(np.median(ibi)) if len(ibi) else None
     return downbeats, beats_per_bar, tempo
 
 
