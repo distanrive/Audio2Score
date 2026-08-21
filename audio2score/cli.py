@@ -18,6 +18,11 @@ def main(argv=None):
     p.add_argument("--cpu", action="store_true", help="force CPU inference")
     p.add_argument("--hand-split", type=int, default=60,
                    help="MIDI pitch that splits LH/RH (default 60 = C4)")
+    p.add_argument("--hand-split-method", choices=["dp", "cluster"], default="dp",
+                   help="LH/RH split method: dp (time-varying register, default) or "
+                        "cluster (local k-means)")
+    p.add_argument("--cluster-window", type=float, default=4.0,
+                   help="cluster split window size in measures (default 4)")
     p.add_argument("--tempo", type=float, default=None, help="force BPM (else auto-detect)")
     p.add_argument("--time-sig", type=str, default=None,
                    help='time signature, e.g. "3/4" or "6/8" (else auto-detect simple meters)')
@@ -33,7 +38,8 @@ def main(argv=None):
         res = transcribe_to_score(
             str(inp), out_dir, midi_only=args.midi_only, device=device,
             hand_split=args.hand_split, tempo=args.tempo, time_sig=args.time_sig,
-            key_spec=args.key_spec,
+            key_spec=args.key_spec, hand_split_method=args.hand_split_method,
+            cluster_window=args.cluster_window,
         )
     except FileNotFoundError as e:
         print(e)

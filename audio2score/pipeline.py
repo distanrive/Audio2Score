@@ -9,7 +9,8 @@ from .notation import midi_to_musicxml
 
 
 def transcribe_to_score(audio_path, out_dir, *, midi_only=False, musicxml_only=False,
-                        device=None, hand_split=60, tempo=None, time_sig=None, key_spec=None):
+                        device=None, hand_split=60, tempo=None, time_sig=None,
+                        key_spec=None, hand_split_method="dp", cluster_window=4.0):
     """Transcribe ``audio_path`` to MIDI and/or MusicXML.
 
     By default both files are kept. ``midi_only=True`` skips MusicXML;
@@ -43,7 +44,9 @@ def transcribe_to_score(audio_path, out_dir, *, midi_only=False, musicxml_only=F
         midi_to_musicxml(str(midi_path), str(xml_path), audio=y, sr=sr,
                          hand_split=hand_split, tempo=bpm, time_sig=time_sig,
                          key_spec=key_spec, downbeats=downbeats,
-                         beats_per_bar=beats_per_bar)
+                         beats_per_bar=beats_per_bar,
+                         hand_split_method=hand_split_method,
+                         cluster_window=cluster_window)
         result["musicxml"] = str(xml_path)
         if musicxml_only:
             midi_path.unlink(missing_ok=True)

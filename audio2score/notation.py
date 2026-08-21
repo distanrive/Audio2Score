@@ -34,7 +34,8 @@ _MINOR_KEY = {0: "c", 1: "c#", 2: "d", 3: "eb", 4: "e", 5: "f",
 
 def midi_to_musicxml(midi_path, out_path, *, audio=None, sr=16000, hand_split=60,
                      subdiv=None, tempo=None, time_sig=None, key_spec=None,
-                     downbeats=None, beats_per_bar=None):
+                     downbeats=None, beats_per_bar=None, hand_split_method="dp",
+                     cluster_window=4.0):
     """Convert a (transcribed) MIDI file to a grand-staff MusicXML score.
 
     ``tempo`` (bpm), ``time_sig`` (int => ``N/4``, or ``"N/D"`` e.g. ``"17/8"``)
@@ -43,6 +44,11 @@ def midi_to_musicxml(midi_path, out_path, *, audio=None, sr=16000, hand_split=60
 
     ``subdiv`` (2 => eighths, 4 => sixteenths) is auto-detected when omitted:
     sixteenths are used only where the music actually has them.
+
+    ``hand_split_method`` picks the LH/RH split: ``"dp"`` (default) is the
+    chord-aware time-varying-register split; ``"cluster"`` is the local k-means
+    (same time-varying idea, but the split point per chord is a 2-means cut over
+    the pitches of the chords within ``cluster_window`` measures of it).
     """
     pm = pretty_midi.PrettyMIDI(str(midi_path))
     events = [(n.start, n.end, n.pitch, n.velocity)
@@ -127,7 +133,10 @@ def midi_to_musicxml(midi_path, out_path, *, audio=None, sr=16000, hand_split=60
         triplet_map = _detect_triplets(clipped, beat_len, subdiv)
         return _chord_merge(_quantize(clipped, bpm, subdiv, triplet_map))
 
-    rh_raw, lh_raw = _split_hands(raw_events, hand_split)
+    if hand_split_method == "cluster":
+        rh_raw, lh_raw = _split_hands_cluster_local(raw_events, cluster_window * measure_sec)
+    else:
+        rh_raw, lh_raw = _split_hands(raw_events, hand_split)
     rh = process(rh_raw)
     lh = process(lh_raw)
 
@@ -256,6 +265,50 @@ def _resplit(pitches, lo_c, hi_c):
                                        + sum((p - cr) ** 2 for p in ps[bi:]))
             assign.append(["LH" if j < best else "RH" for j in range(k)])
     return assign
+
+
+def _kmeans_threshold(pitches):
+    """2-means on 1-D pitches; return the midpoint of the two cluster means."""
+    pitches = np.asarray(sorted(set(pitches)), dtype=float)
+    if pitches.size < 2:
+        return float(pitches[0]) if pitches.size else 0.0
+    lo, hi = np.percentile(pitches, [25, 75])
+    if lo == hi:
+        lo, hi = pitches[0], pitches[-1]
+    for _ in range(200):
+        in_lo = (pitches - lo) ** 2 <= (pitches - hi) ** 2
+        new_lo = float(pitches[in_lo].mean()) if in_lo.any() else lo
+        new_hi = float(pitches[~in_lo].mean()) if (~in_lo).any() else hi
+        if new_lo == lo and new_hi == hi:
+            break
+        lo, hi = new_lo, new_hi
+    return (lo + hi) / 2.0
+
+
+def _split_hands_cluster_local(events, window_sec):
+    """Dynamic hand split: k-means within a sliding time window (chord-aware).
+
+    Each chord is split at a threshold estimated by k-means on the pitches of all
+    chords within ``window_sec`` of it -- a *time-varying* threshold (high under a
+    high LH chord, low under a low RH melody). This is '聚类' with the same
+    time-varying-register idea the DP split implements via EM.
+    """
+    ev = sorted(events, key=lambda e: (e[0], e[2]))
+    global_threshold = _kmeans_threshold([e[2] for e in ev])
+    chords = []
+    for e in ev:
+        if chords and e[0] - chords[-1][0] <= _CHORD_TOL:
+            chords[-1][1].append(e)
+        else:
+            chords.append((e[0], [e]))
+    rh, lh = [], []
+    for t, notes in chords:
+        local = [n for tj, nj in chords if abs(tj - t) <= window_sec for n in nj]
+        pitches = sorted({n[2] for n in local})
+        threshold = _kmeans_threshold(pitches) if len(pitches) >= 2 else global_threshold
+        for n in notes:
+            (rh if n[2] > threshold else lh).append(n)
+    return rh, lh
 
 
 def _warp_to_grid(events, db, measure_sec):

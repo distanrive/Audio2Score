@@ -28,6 +28,8 @@ class Audio2ScoreApp:
         self.time_sig_var = tk.StringVar(value="自动")
         self.key_var = tk.StringVar()
         self.hand_split_var = tk.StringVar(value="60")
+        self.hand_split_method_var = tk.StringVar(value="dp")
+        self.cluster_window_var = tk.StringVar(value="4.0")
         self.musicxml_only_var = tk.BooleanVar()
 
         self._stop = False
@@ -75,10 +77,19 @@ class Audio2ScoreApp:
 
         ttk.Label(opt_frame, text="左右手分界音:").grid(row=2, column=0, sticky="w", padx=(0, 5), pady=(5, 0))
         ttk.Entry(opt_frame, textvariable=self.hand_split_var, width=12).grid(row=2, column=1, sticky="w", pady=(5, 0))
-        ttk.Label(opt_frame, text="（MIDI 音高，默认 60=C4）", foreground="gray").grid(row=2, column=2, sticky="w", padx=(5, 0), pady=(5, 0))
+        ttk.Label(opt_frame, text="（MIDI 音高，默认 60=C4，仅 dp 分割用）", foreground="gray").grid(row=2, column=2, sticky="w", padx=(5, 0), pady=(5, 0))
+
+        ttk.Label(opt_frame, text="左右手分割:").grid(row=3, column=0, sticky="w", padx=(0, 5), pady=(5, 0))
+        ttk.Combobox(opt_frame, textvariable=self.hand_split_method_var,
+                     values=["dp", "cluster"], state="readonly", width=10).grid(row=3, column=1, sticky="w", pady=(5, 0))
+        ttk.Label(opt_frame, text="（dp=动态音域，cluster=局部聚类）", foreground="gray").grid(row=3, column=2, sticky="w", padx=(5, 0), pady=(5, 0))
+
+        ttk.Label(opt_frame, text="聚类窗口:").grid(row=4, column=0, sticky="w", padx=(0, 5), pady=(5, 0))
+        ttk.Entry(opt_frame, textvariable=self.cluster_window_var, width=12).grid(row=4, column=1, sticky="w", pady=(5, 0))
+        ttk.Label(opt_frame, text="（小节数，默认 4，仅 cluster 用）", foreground="gray").grid(row=4, column=2, sticky="w", padx=(5, 0), pady=(5, 0))
 
         ttk.Checkbutton(opt_frame, text="只输出 MusicXML（跳过 MIDI）",
-                        variable=self.musicxml_only_var).grid(row=3, column=0, columnspan=3, sticky="w", pady=(5, 0))
+                        variable=self.musicxml_only_var).grid(row=5, column=0, columnspan=3, sticky="w", pady=(5, 0))
 
         # 日志
         log_frame = ttk.LabelFrame(main, text="日志", padding="5")
@@ -139,7 +150,9 @@ class Audio2ScoreApp:
 
         # 选项
         opts = {"musicxml_only": self.musicxml_only_var.get(),
-                "hand_split": int(self.hand_split_var.get() or 60)}
+                "hand_split": int(self.hand_split_var.get() or 60),
+                "hand_split_method": self.hand_split_method_var.get(),
+                "cluster_window": float(self.cluster_window_var.get() or 4.0)}
         ts = self.time_sig_var.get().strip()
         if ts and ts != "自动":
             opts["time_sig"] = ts

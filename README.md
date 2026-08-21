@@ -39,8 +39,8 @@ pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorc
 
 ```bash
 pip install librosa                  # 自动带 scipy / numba / soundfile
-pip install pretty_midi miditoolkit
-pip install music21 partitura
+pip install pretty_midi
+pip install music21
 pip install madmom-infer               # 下拍检测（纯 numpy 的 madmom 重写，无编译）
 ```
 
@@ -99,7 +99,10 @@ python -m audio2score input.wav -o out_dir --midi-only
 # 手动指定拍号 / 调号 / 强制 CPU
 python -m audio2score input.wav -o out_dir --time-sig 3/4 --key 2 --cpu
 
-# 左右手初始分界音（默认 60=C4；实际分割点随时间变化，此值只作初始先验）
+# 左右手分割方式（默认 dp=时变音域；cluster=局部 k-means 聚类）
+python -m audio2score input.wav -o out_dir --hand-split-method cluster --cluster-window 4
+
+# 左右手初始分界音（默认 60=C4；仅 dp 方法用，作初始先验）
 python -m audio2score input.wav -o out_dir --hand-split 60
 ```
 
